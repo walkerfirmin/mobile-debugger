@@ -90,10 +90,10 @@ export class CaptureSession {
   async start(): Promise<void> {
     // Wire handlers BEFORE enabling domains so we don't drop the first event.
     this.client.on('Runtime.consoleAPICalled', (params: unknown) => {
-      void this.onConsoleAPI(params as ConsoleAPIParams);
+      void this.onConsoleAPI(params as ConsoleAPIParams).catch(() => undefined);
     });
     this.client.on('Runtime.exceptionThrown', (params: unknown) => {
-      void this.onException(params as ExceptionParams);
+      void this.onException(params as ExceptionParams).catch(() => undefined);
     });
     this.client.on('Log.entryAdded', (params: unknown) => {
       this.onLogEntry(params as LogEntryParams);

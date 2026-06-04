@@ -67,12 +67,16 @@ program
     try {
       web = await acquireWebTarget({ platform, device: opts.device, env, onInfo: () => {} });
       const r = await freshFetch(`http://127.0.0.1:${web.port}${web.jsonPath}`);
-      const list = (await r.json()) as Array<{ id: string; type?: string; url?: string; title?: string }>;
+      const list = (await r.json()) as Array<{ id?: string; type?: string; url?: string; title?: string; webSocketDebuggerUrl?: string }>;
       console.log(chalk.bold('\nPage targets:'));
       if (list.length === 0) {
         console.log('  (none — make sure the app is debuggable and a WebView is alive)');
       }
-      for (const t of list) console.log(`  ${t.id}\t${t.type ?? ''}\t${t.title ?? ''}\t${t.url ?? ''}`);
+      for (const t of list) {
+        // iOS (iwdp) omits `id`; derive it from the WebSocket debugger URL.
+        const id = t.id ?? t.webSocketDebuggerUrl?.split('/').pop() ?? '';
+        console.log(`  ${id}\t${t.type ?? ''}\t${t.title ?? ''}\t${t.url ?? ''}`);
+      }
     } catch (err) {
       console.error(chalk.yellow(`could not list page targets: ${(err as Error).message}`));
     } finally {

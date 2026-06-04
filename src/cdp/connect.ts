@@ -18,7 +18,15 @@
 import CDP from 'chrome-remote-interface';
 import type { CaptureOptions, Platform } from '../types.js';
 import { CaptureSession, type SessionClient, type Sink } from './capture.js';
+import { createWebKitClient } from '../ios/webkit-client.js';
 import { freshFetch } from './http.js';
+
+/** Minimal client surface shared by the CRI client and the WebKit adapter. */
+interface RawClient {
+  send(method: string, params?: unknown): Promise<unknown>;
+  on(event: string, handler: (params: unknown) => void): void;
+  close(): Promise<void> | void;
+}
 
 interface JsonListEntry {
   id: string;
@@ -57,24 +65,31 @@ async function fetchTargets(port: number, jsonPath: string): Promise<JsonListEnt
   const res = await freshFetch(`http://127.0.0.1:${port}${jsonPath}`);
   if (!res.ok) throw new Error(`${jsonPath} ${res.status}`);
   const all = (await res.json()) as JsonListEntry[];
-  return all.filter((e) => (e.type ?? 'page') === 'page');
+  return all
+    .filter((e) => (e.type ?? 'page') === 'page')
+    .map((e) => {
+      // `ios-webkit-debug-proxy` omits the top-level `id` field; the page id is
+      // the final segment of the WebSocket debugger URL (`/devtools/page/<id>`).
+      // Normalise it so target dedup and explicit `--target <id>` work on iOS.
+      if (e.id) return e;
+      const fromWs = e.webSocketDebuggerUrl?.split('/').pop();
+      return { ...e, id: fromWs ?? e.webSocketDebuggerUrl ?? '' };
+    });
 }
 
-/** Wraps a CRI client to match {@link SessionClient}. */
-function wrap(client: CDP.Client): SessionClient {
+/** Wraps a raw client (CRI or the WebKit adapter) to match {@link SessionClient}. */
+function wrap(client: RawClient): SessionClient {
   return {
-    send: (method, params) => (client as unknown as { send: (m: string, p?: unknown) => Promise<unknown> }).send(method, params),
-    on: (event, handler) => {
-      // CRI exposes events as `client.on('Domain.event', handler)`.
-      (client as unknown as { on: (e: string, h: (p: unknown) => void) => void }).on(event, handler);
-    },
+    send: (method, params) => client.send(method, params),
+    on: (event, handler) => client.on(event, handler),
   };
 }
 
 export async function attach(opts: AttachOptions): Promise<AttachHandle> {
   const pollMs = opts.pollMs ?? 1500;
   const jsonPath = opts.jsonPath ?? '/json/list';
-  const seen = new Map<string, CDP.Client>();
+  const isIos = opts.platform === 'ios';
+  const seen = new Map<string, RawClient>();
   let stopped = false;
   let mainAttached = false;
   let consecutivePollFailures = 0;
@@ -114,9 +129,14 @@ export async function attach(opts: AttachOptions): Promise<AttachHandle> {
         // (/json/version, /json/protocol). Android WebView's HTTP server is
         // unstable under repeated connections, so we limit ourselves to one
         // /json/list per poll and then connect to the WS directly.
-        const client = entry.webSocketDebuggerUrl
-          ? await CDP({ target: entry.webSocketDebuggerUrl, local: true })
-          : await CDP({ port: opts.port, target: entry.id, local: true });
+        // iOS (modern WebKit) needs Target-domain wrapping, which CRI cannot
+        // do; use our adapter. Android/Chromium WebViews use CRI directly.
+        const client: RawClient =
+          isIos && entry.webSocketDebuggerUrl
+            ? await createWebKitClient(entry.webSocketDebuggerUrl, log)
+            : ((entry.webSocketDebuggerUrl
+                ? await CDP({ target: entry.webSocketDebuggerUrl, local: true })
+                : await CDP({ port: opts.port, target: entry.id, local: true })) as unknown as RawClient);
         seen.set(entry.id, client);
         const labelIndex = seen.size === 1 ? 'main' : `iab:${seen.size - 1}`;
         const session = new CaptureSession(
@@ -153,7 +173,7 @@ export async function attach(opts: AttachOptions): Promise<AttachHandle> {
       stopped = true;
       if (timer) clearInterval(timer);
       await Promise.all(
-        [...seen.values()].map((c) => (c.close ? c.close() : Promise.resolve()).catch(() => undefined)),
+        [...seen.values()].map((c) => Promise.resolve(c.close()).catch(() => undefined)),
       );
       seen.clear();
     },

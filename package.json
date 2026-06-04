@@ -1,4 +1,4 @@
- {
+{
   "name": "dump-console-logs",
   "version": "0.1.0",
   "description": "Capture deep DevTools console logs plus native device logs from Android and iOS WebView apps (main app + in-app-browser) into NDJSON + a self-contained HTML viewer.",
@@ -31,6 +31,7 @@
   "devDependencies": {
     "@types/chrome-remote-interface": "^0.31.14",
     "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"

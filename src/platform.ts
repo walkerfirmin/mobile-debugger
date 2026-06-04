@@ -70,7 +70,7 @@ async function acquireIos(opts: AcquireOptions): Promise<WebTarget> {
   }
   const device = await resolveIosDevice(opts.device, opts.env);
   const port = await pickFreePort();
-  const iwdp: IwdpHandle = await startIwdp(device.udid, port, opts.onInfo);
+  const iwdp: IwdpHandle = await startIwdp(device.udid, port, device.env, opts.onInfo);
   return {
     port: iwdp.port,
     jsonPath: iwdp.jsonPath,

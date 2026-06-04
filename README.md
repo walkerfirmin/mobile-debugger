@@ -447,6 +447,14 @@ no page targets, confirm the proxy is installed, the WebView is inspectable
 (`WKWebView.isInspectable` + *Settings ▸ Safari ▸ Advanced ▸ Web Inspector*),
 and — for physical devices — that the device is paired (`idevice_id -l`).
 
+On modern simulators (iOS 16.4+) the WebInspector protocol is reachable only
+through a unix domain socket (`com.apple.webinspectord_sim.socket`, not the
+legacy TCP port) and wraps every command in the `Target` domain. `dump-logs`
+handles both automatically: it locates the socket per-UDID and uses a built-in
+WebKit `Target`-domain adapter that unwraps `Target.dispatchMessageFromTarget`
+events and maps the legacy `Console.messageAdded` stream into the normal
+capture pipeline — so no extra configuration is needed.
+
 **`ios-webkit-debug-proxy did not become ready on port …`**
 This error occurs when WebView capture fails. Common causes:
 1. **Native-only app:** The app doesn't have an inspectable WebView. Use

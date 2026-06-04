@@ -182,6 +182,11 @@ async function expandObjectLike(
   } catch {
     return { t: 'unknown', description: obj.description };
   }
+  // Some inspector backends (e.g. WebKit via ios-webkit-debug-proxy) may return
+  // a response without a `result` array; treat that as "no enumerable props".
+  if (!props || !Array.isArray(props.result)) {
+    return asArray ? { t: 'array', entries: [] } : { t: 'object', entries: {} };
+  }
   if (asArray) {
     const entries: SerializedValue[] = [];
     let truncated = false;
