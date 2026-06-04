@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dump-logs viewer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fcfcfb;
+    --panel: #ffffff;
+    --fg: #101418;
+    --muted: #5d6570;
+    --border: #d9dee5;
+    --hover: #f2f6fa;
+    --accent: #0061a8;
+    --err: #b42318;
+    --warn: #9f580a;
+    --info: #155eef;
+    --debug: #556987;
+    --log: #111827;
+    --shadow: 0 12px 34px rgba(20, 36, 58, 0.08);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1117;
+      --panel: #141b24;
+      --fg: #e6edf5;
+      --muted: #93a3b8;
+      --border: #27313f;
+      --hover: #1a2330;
+      --accent: #4aa6ff;
+      --err: #f97066;
+      --warn: #fdb022;
+      --info: #84adff;
+      --debug: #9bb3cf;
+      --log: #e6edf5;
+      --shadow: 0 12px 34px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1300px 800px at -15% -20%, rgba(0, 97, 168, 0.14), transparent 60%),
+      radial-gradient(1000px 600px at 120% -40%, rgba(46, 203, 149, 0.12), transparent 55%),
+      var(--bg);
+    color: var(--fg);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .app {
+    height: 100%;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 0;
+  }
+
+  .toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(6px);
+    box-shadow: var(--shadow);
+    padding: 10px 12px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .toolbar-top {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) auto auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .toolbar-bottom {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .brand { font-size: 14px; font-weight: 700; color: var(--accent); }
+  .stats { color: var(--muted); white-space: nowrap; }
+
+  .input, .select, .btn {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font: inherit;
+  }
+
+  .input {
+    width: 100%;
+  }
+
+  .btn {
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn:active { transform: translateY(1px); }
+
+  .levels {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .level-chip {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 999px;
+    padding: 4px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .level-chip input { margin: 0; }
+
+  .progress-wrap {
+    height: 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--border) 50%, transparent);
+    overflow: hidden;
+  }
+
+  .progress {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #0f8cff 0%, #20c0cf 100%);
+    transition: width 120ms linear;
+  }
+
+  .list-shell {
+    min-height: 0;
+    overflow: auto;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+  }
+
+  .list-inner {
+    position: relative;
+    width: 100%;
+  }
+
+  .rows {
+    position: absolute;
+    left: 0;
+    right: 0;
+  }
+
+  .row {
+    height: 48px;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 110px 72px 1fr 34px;
+    align-items: center;
+    padding: 0 8px;
+    gap: 8px;
+    cursor: pointer;
+  }
+
+  .row:hover { background: var(--hover); }
+  .row.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  .ts { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .lvl { text-transform: uppercase; font-weight: 700; font-size: 11px; white-space: nowrap; }
+  .lvl-error { color: var(--err); }
+  .lvl-warn { color: var(--warn); }
+  .lvl-info { color: var(--info); }
+  .lvl-debug, .lvl-trace, .lvl-verbose { color: var(--debug); }
+  .lvl-log { color: var(--log); }
+
+  .summary {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 7px;
+    height: 20px;
+    color: var(--muted);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .muted { color: var(--muted); }
+
+  .drawer {
+    background: var(--panel);
+    min-height: 0;
+    max-height: 44vh;
+    height: 300px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    border-top: 1px solid var(--border);
+  }
+
+  .drawer.hidden { display: none; }
+
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .drawer-title { font-weight: 700; }
+  .drawer-body {
+    overflow: auto;
+    padding: 10px;
+  }
+
+  details { cursor: pointer; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "> "; color: var(--muted); }
+  details[open] > summary::before { content: "v "; }
+  .key { color: var(--info); }
+  .str { color: #0c7a3e; }
+  .num { color: #9d6f00; }
+  .bool { color: #8850ff; }
+  .nul { color: var(--muted); }
+  .meta { color: var(--muted); font-style: italic; }
+  .stack { white-space: pre-wrap; color: var(--muted); margin-top: 6px; }
+
+  .status {
+    padding: 10px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 840px) {
+    .toolbar-top {
+      grid-template-columns: 1fr;
+    }
+    .row {
+      grid-template-columns: 92px 60px 1fr 28px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <section class="toolbar">
+    <div class="toolbar-top">
+      <input id="q" class="input" placeholder="Search logs..." />
+      <label><input id="deepSearch" type="checkbox" /> deep search</label>
+      <div class="stats" id="stats">Loading...</div>
+    </div>
+    <div class="toolbar-bottom">
+      <div class="levels" id="levels"></div>
+      <label>target <select id="target" class="select"><option value="">(any)</option></select></label>
+      <label>source <select id="source" class="select"><option value="">(any)</option></select></label>
+      <label>platform <select id="platform" class="select"><option value="">(any)</option></select></label>
+      <label>channel <select id="channel" class="select"><option value="">(any)</option></select></label>
+      <button id="clear" class="btn">clear</button>
+      <span class="brand">dump-logs viewer</span>
+    </div>
+    <div class="progress-wrap"><div id="progress" class="progress"></div></div>
+  </section>
+
+  <section id="listShell" class="list-shell">
+    <div id="listInner" class="list-inner">
+      <div id="rows" class="rows"></div>
+    </div>
+  </section>
+
+  <section id="drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <div class="drawer-title" id="drawerTitle">Record details</div>
+      <div>
+        <button id="copyJson" class="btn">copy json</button>
+        <button id="closeDrawer" class="btn">close</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const ROW_H = 48;
+  const OVERSCAN = 10;
+  const LEVELS = ['error', 'warn', 'info', 'log', 'debug', 'trace', 'verbose', 'dir', 'group', 'groupCollapsed', 'groupEnd', 'assert', 'count', 'table', 'timeEnd'];
+
+  const q = document.getElementById('q');
+  const deepSearch = document.getElementById('deepSearch');
+  const levels = document.getElementById('levels');
+  const target = document.getElementById('target');
+  const source = document.getElementById('source');
+  const platform = document.getElementById('platform');
+  const channel = document.getElementById('channel');
+  const clearBtn = document.getElementById('clear');
+  const stats = document.getElementById('stats');
+  const progress = document.getElementById('progress');
+  const listShell = document.getElementById('listShell');
+  const listInner = document.getElementById('listInner');
+  const rows = document.getElementById('rows');
+  const drawer = document.getElementById('drawer');
+  const drawerTitle = document.getElementById('drawerTitle');
+  const drawerBody = document.getElementById('drawerBody');
+  const copyJsonBtn = document.getElementById('copyJson');
+  const closeDrawerBtn = document.getElementById('closeDrawer');
+
+  const records = [];
+  let filteredIdx = [];
+  let selectedFilteredPos = -1;
+  let pendingFilterToken = 0;
+  let workerReady = false;
+  let dataLoadDone = false;
+  let scheduleFilterImpl = () => {};
+
+  function scheduleFilter() {
+    scheduleFilterImpl();
+  }
+
+  const levelInputs = new Map();
+  const targets = new Map();
+  const sources = new Set();
+  const platforms = new Set();
+  const channels = new Set();
+
+  for (const lvl of LEVELS) {
+    const label = document.createElement('label');
+    label.className = 'level-chip';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = lvl;
+    label.appendChild(cb);
+    const text = document.createElement('span');
+    text.textContent = lvl;
+    label.appendChild(text);
+    levels.appendChild(label);
+    levelInputs.set(lvl, cb);
+    cb.addEventListener('change', scheduleFilter);
+  }
+
+  const workerCode = `
+    let records = [];
+    function normalize(v) {
+      return String(v || '').toLowerCase();
+    }
+    onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === 'init') {
+        records = msg.records;
+        postMessage({ type: 'ready' });
+        return;
+      }
+      if (msg.type !== 'filter') return;
+      const query = normalize(msg.query);
+      const levels = new Set(msg.levels || []);
+      const target = msg.target || '';
+      const source = msg.source || '';
+      const platform = msg.platform || '';
+      const channel = msg.channel || '';
+      const out = [];
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        if (levels.size && !levels.has(r.level)) continue;
+        if (target && r.targetId !== target) continue;
+        if (source && r.source !== source) continue;
+        if (platform && (r.platform || '') !== platform) continue;
+        if (channel && ((r.channel || 'web') !== channel)) continue;
+        if (query) {
+          const s = msg.deepSearch ? r.deep : r.fast;
+          if (!s.includes(query)) continue;
+        }
+        out.push(i);
+      }
+      postMessage({ type: 'result', token: msg.token, indices: out });
+    };
+  `;
+
+  const worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: 'text/javascript' })));
+  worker.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'ready') {
+      workerReady = true;
+      scheduleFilter();
+      return;
+    }
+    if (msg.type !== 'result') return;
+    if (msg.token !== pendingFilterToken) return;
+    filteredIdx = msg.indices;
+    if (selectedFilteredPos >= filteredIdx.length) selectedFilteredPos = -1;
+    renderViewport();
+    updateStats();
+  };
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function appendOptions(selectEl, values, labelFromValue) {
+    const sorted = Array.from(values).sort();
+    for (const v of sorted) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = labelFromValue ? labelFromValue(v) : v;
+      selectEl.appendChild(o);
+    }
+  }
+
+  function fmtTs(s) {
+    try {
+      return new Date(s).toISOString().slice(11, 23);
+    } catch {
+      return s;
+    }
+  }
+
+  function flattenValue(v, out) {
+    if (!v || typeof v !== 'object') return;
+    switch (v.t) {
+      case 'primitive':
+        if (v.value !== null && v.value !== undefined) out.push(String(v.value));
+        return;
+      case 'string':
+        out.push(v.value || '');
+        return;
+      case 'bigint':
+      case 'symbol':
+      case 'function':
+      case 'date':
+      case 'regexp':
+      case 'unknown':
+        if (v.value) out.push(String(v.value));
+        if (v.description) out.push(String(v.description));
+        if (v.iso) out.push(String(v.iso));
+        if (v.source) out.push(String(v.source));
+        if (v.name) out.push(String(v.name));
+        return;
+      case 'error':
+        if (v.name) out.push(v.name);
+        if (v.message) out.push(v.message);
+        if (v.stack) out.push(v.stack);
+        if (v.cause) flattenValue(v.cause, out);
+        return;
+      case 'array':
+      case 'set':
+        for (const item of (v.entries || [])) flattenValue(item, out);
+        return;
+      case 'object':
+        for (const [k, vv] of Object.entries(v.entries || {})) {
+          out.push(k);
+          flattenValue(vv, out);
+        }
+        return;
+      case 'map':
+        for (const pair of (v.entries || [])) {
+          if (!Array.isArray(pair)) continue;
+          flattenValue(pair[0], out);
+          flattenValue(pair[1], out);
+        }
+        return;
+      default:
+        return;
+    }
+  }
+
+  function buildFastSearchString(r) {
+    const chunks = [r.level || '', r.source || '', r.targetLabel || '', r.targetId || '', r.url || '', r.platform || '', r.channel || ''];
+    for (const a of (r.args || [])) flattenValue(a, chunks);
+    if (r.stack) chunks.push(r.stack);
+    return chunks.join(' ').toLowerCase();
+  }
+
+  function valuePreview(v) {
+    if (!v || typeof v !== 'object') return '?';
+    switch (v.t) {
+      case 'string': return '"' + (v.value || '').slice(0, 90) + '"';
+      case 'primitive': return String(v.value);
+      case 'error': return (v.name || 'Error') + ': ' + (v.message || '');
+      case 'object': return (v.className || 'Object') + '{' + Object.keys(v.entries || {}).length + '}';
+      case 'array': return 'Array(' + (v.entries || []).length + ')';
+      case 'map': return 'Map(' + (v.entries || []).length + ')';
+      case 'set': return 'Set(' + (v.entries || []).length + ')';
+      case 'undefined': return 'undefined';
+      default: return v.t;
+    }
+  }
+
+  function renderValue(v, depth) {
+    if (!v || typeof v !== 'object') return '<span class="meta">?</span>';
+    switch (v.t) {
+      case 'undefined': return '<span class="nul">undefined</span>';
+      case 'primitive':
+        if (v.value === null) return '<span class="nul">null</span>';
+        if (typeof v.value === 'boolean') return '<span class="bool">' + v.value + '</span>';
+        if (typeof v.value === 'number') return '<span class="num">' + v.value + '</span>';
+        return '<span>' + esc(v.value) + '</span>';
+      case 'string': return '<span class="str">"' + esc(v.value) + '"' + (v.truncated ? '<span class="meta">...</span>' : '') + '</span>';
+      case 'bigint': return '<span class="num">' + esc(v.value) + 'n</span>';
+      case 'symbol': return '<span class="meta">Symbol(' + esc(v.description || '') + ')</span>';
+      case 'function': return '<span class="meta">f ' + esc(v.name || '') + '()</span>';
+      case 'date': return '<span class="meta">Date </span><span class="str">' + esc(v.iso) + '</span>';
+      case 'regexp': return '<span class="str">/' + esc(v.source) + '/' + esc(v.flags) + '</span>';
+      case 'cycle': return '<span class="meta">[Circular]</span>';
+      case 'truncated': return '<span class="meta">[truncated: ' + esc(v.reason) + ']</span>';
+      case 'unknown': return '<span class="meta">' + esc(v.description || '?') + '</span>';
+      case 'promise': return '<span class="meta">Promise' + (v.state ? ' (' + esc(v.state) + ')' : '') + '</span>';
+      case 'node': return '<span class="meta">&lt;' + esc(v.tagName) + (v.id ? ' id="' + esc(v.id) + '"' : '') + '&gt;</span>';
+      case 'typedarray': return '<span class="meta">' + esc(v.className) + '(' + esc(v.length) + ')</span>';
+      case 'error': {
+        let head = '<span class="lvl-error">' + esc(v.name) + '</span>: <span>' + esc(v.message || '') + '</span>';
+        if (v.stack) head += '<div class="stack">' + esc(v.stack) + '</div>';
+        if (v.cause) head += '<div><span class="meta">cause:</span> ' + renderValue(v.cause, depth + 1) + '</div>';
+        return head;
+      }
+      case 'array': {
+        if (depth >= 6) return '<span class="meta">Array(' + v.entries.length + ')</span>';
+        const items = (v.entries || []).map((e, i) => '<div><span class="key">' + i + ':</span> ' + renderValue(e, depth + 1) + '</div>').join('');
+        return '<details ' + (depth === 0 ? 'open' : '') + '><summary>Array(' + (v.entries || []).length + ')' + (v.truncated ? ' <span class="meta">...</span>' : '') + '</summary>' + items + '</details>';
+      }
+      case 'object': {
+        const entries = v.entries || {};
+        const keys = Object.keys(entries);
+        const head = (v.className ? esc(v.className) + ' ' : '') + '{ ' + keys.length + ' keys }';
+        const body = keys.map((k) => '<div><span class="key">' + esc(k) + ':</span> ' + renderValue(entries[k], depth + 1) + '</div>').join('');
+        return '<details ' + (depth === 0 ? 'open' : '') + '><summary>' + head + (v.truncated ? ' <span class="meta">...</span>' : '') + '</summary>' + body + '</details>';
+      }
+      case 'map': {
+        const body = (v.entries || []).map((pair) => {
+          if (!Array.isArray(pair)) return '';
+          return '<div><span class="key">' + renderValue(pair[0], depth + 1) + '</span> => ' + renderValue(pair[1], depth + 1) + '</div>';
+        }).join('');
+        return '<details><summary>Map(' + (v.entries || []).length + ')' + (v.truncated ? ' <span class="meta">...</span>' : '') + '</summary>' + body + '</details>';
+      }
+      case 'set': {
+        const body = (v.entries || []).map((e) => '<div>' + renderValue(e, depth + 1) + '</div>').join('');
+        return '<details><summary>Set(' + (v.entries || []).length + ')' + (v.truncated ? ' <span class="meta">...</span>' : '') + '</summary>' + body + '</details>';
+      }
+      default:
+        return '<span class="meta">' + esc(JSON.stringify(v)) + '</span>';
+    }
+  }
+
+  function selectedLevels() {
+    const out = [];
+    for (const [lvl, input] of levelInputs.entries()) {
+      if (input.checked) out.push(lvl);
+    }
+    return out;
+  }
+
+  function filterPayload() {
+    return {
+      query: q.value.trim().toLowerCase(),
+      levels: selectedLevels(),
+      target: target.value,
+      source: source.value,
+      platform: platform.value,
+      channel: channel.value,
+      deepSearch: !!deepSearch.checked,
+    };
+  }
+
+  scheduleFilterImpl = debounce(() => {
+    if (!workerReady) return;
+    pendingFilterToken += 1;
+    worker.postMessage({ type: 'filter', token: pendingFilterToken, ...filterPayload() });
+  }, 150);
+
+  function debounce(fn, ms) {
+    let timer = 0;
+    return function (...args) {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(null, args), ms);
+    };
+  }
+
+  function updateStats() {
+    const loaded = records.length;
+    const shown = filteredIdx.length;
+    const suffix = dataLoadDone ? '' : ' (loading)';
+    stats.textContent = shown + ' / ' + loaded + suffix;
+  }
+
+  function setSelected(pos) {
+    selectedFilteredPos = pos;
+    if (selectedFilteredPos < 0 || selectedFilteredPos >= filteredIdx.length) {
+      drawer.classList.add('hidden');
+      return;
+    }
+    const recordIndex = filteredIdx[selectedFilteredPos];
+    const rec = records[recordIndex];
+    drawer.classList.remove('hidden');
+    drawerTitle.textContent = (rec.level || 'log') + ' | ' + (rec.targetLabel || rec.targetId || '') + ' | ' + (rec.ts || '');
+    const argsHtml = (rec.args || []).map((a) => renderValue(a, 0)).join('<div style="height:8px"></div>');
+    drawerBody.innerHTML =
+      '<div><span class="pill">' + esc(rec.source || '') + '</span>' +
+      '<span class="pill">' + esc(rec.platform || '') + '</span>' +
+      '<span class="pill">' + esc(rec.channel || 'web') + '</span></div>' +
+      '<div style="margin-top:10px">' + argsHtml + '</div>' +
+      (rec.stack ? '<div class="stack">' + esc(rec.stack) + '</div>' : '');
+    renderViewport();
+  }
+
+  function rowHtml(rec, rowPos) {
+    const preview = rec.args && rec.args.length ? valuePreview(rec.args[0]) : '';
+    return '<div class="row' + (rowPos === selectedFilteredPos ? ' selected' : '') + '" data-pos="' + rowPos + '">' +
+      '<div class="ts">' + esc(fmtTs(rec.ts || '')) + '</div>' +
+      '<div class="lvl lvl-' + esc(rec.level || 'log') + '">' + esc(rec.level || 'log') + '</div>' +
+      '<div class="summary">' +
+      '<span class="pill">' + esc(rec.targetLabel || rec.targetId || '') + '</span>' +
+      '<span class="pill">' + esc(rec.source || '') + '</span>' +
+      (rec.platform ? '<span class="pill">' + esc(rec.platform) + '</span>' : '') +
+      '<span>' + esc(preview) + '</span>' +
+      '</div>' +
+      '<button class="btn" data-copy="' + rowPos + '" title="copy json">cp</button>' +
+      '</div>';
+  }
+
+  function renderViewport() {
+    const total = filteredIdx.length;
+    listInner.style.height = String(total * ROW_H) + 'px';
+    const scrollTop = listShell.scrollTop;
+    const viewportH = listShell.clientHeight;
+    const start = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+    const count = Math.ceil(viewportH / ROW_H) + OVERSCAN * 2;
+    const end = Math.min(total, start + count);
+    rows.style.top = String(start * ROW_H) + 'px';
+
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const rec = records[filteredIdx[i]];
+      html += rowHtml(rec, i);
+    }
+    rows.innerHTML = html;
+
+    for (const el of rows.querySelectorAll('.row')) {
+      el.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.dataset && ev.target.dataset.copy !== undefined) return;
+        const pos = Number(el.dataset.pos);
+        setSelected(pos);
+      });
+    }
+    for (const btn of rows.querySelectorAll('[data-copy]')) {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const pos = Number(btn.dataset.copy);
+        const rec = records[filteredIdx[pos]];
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(rec, null, 2));
+        } catch {
+          // Clipboard not available in all contexts.
+        }
+      });
+    }
+  }
+
+  function ensureSelectOption(selectEl, value, label) {
+    if (!value) return;
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label || value;
+    selectEl.appendChild(option);
+  }
+
+  function finalizeSelects() {
+    appendOptions(source, sources);
+    appendOptions(platform, platforms);
+    appendOptions(channel, channels);
+    const sortedTargets = Array.from(targets.entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    for (const [id, label] of sortedTargets) {
+      ensureSelectOption(target, id, label || id);
+    }
+  }
+
+  async function loadData() {
+    stats.textContent = 'Loading...';
+    const res = await fetch('/data', { cache: 'no-store' });
+    if (!res.ok || !res.body) {
+      throw new Error('Could not load /data');
+    }
+
+    const totalBytes = Number(res.headers.get('content-length') || '0');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let received = 0;
+    let buf = '';
+    let sinceUi = 0;
+
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      received += part.value.byteLength;
+      buf += decoder.decode(part.value, { stream: true });
+      let idx = buf.indexOf('\n');
+      while (idx !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) {
+          try {
+            const rec = JSON.parse(line);
+            rec._fast = buildFastSearchString(rec);
+            rec._deep = '';
+            records.push(rec);
+            targets.set(rec.targetId, rec.targetLabel || rec.targetId || 'unknown');
+            if (rec.source) sources.add(rec.source);
+            if (rec.platform) platforms.add(rec.platform);
+            channels.add(rec.channel || 'web');
+            sinceUi++;
+          } catch {
+            // Ignore malformed line.
+          }
+        }
+        idx = buf.indexOf('\n');
+      }
+
+      if (totalBytes > 0) {
+        progress.style.width = String(Math.min(100, Math.round((received / totalBytes) * 100))) + '%';
+      }
+
+      if (sinceUi >= 250) {
+        stats.textContent = records.length + ' loaded...';
+        sinceUi = 0;
+      }
+    }
+
+    const tail = (buf + decoder.decode()).trim();
+    if (tail) {
+      try {
+        const rec = JSON.parse(tail);
+        rec._fast = buildFastSearchString(rec);
+        rec._deep = '';
+        records.push(rec);
+        targets.set(rec.targetId, rec.targetLabel || rec.targetId || 'unknown');
+        if (rec.source) sources.add(rec.source);
+        if (rec.platform) platforms.add(rec.platform);
+        channels.add(rec.channel || 'web');
+      } catch {
+        // Ignore malformed tail line.
+      }
+    }
+
+    progress.style.width = '100%';
+    dataLoadDone = true;
+    finalizeSelects();
+
+    worker.postMessage({
+      type: 'init',
+      records: records.map((r) => {
+        const fast = r._fast || '';
+        const deep = deepSearch.checked ? JSON.stringify(r).toLowerCase() : '';
+        r._deep = deep;
+        return {
+          level: r.level || '',
+          targetId: r.targetId || '',
+          source: r.source || '',
+          platform: r.platform || '',
+          channel: r.channel || 'web',
+          fast,
+          deep,
+        };
+      }),
+    });
+  }
+
+  q.addEventListener('input', scheduleFilter);
+  deepSearch.addEventListener('change', () => {
+    if (deepSearch.checked) {
+      for (const r of records) {
+        if (!r._deep) r._deep = JSON.stringify(r).toLowerCase();
+      }
+      worker.postMessage({
+        type: 'init',
+        records: records.map((r) => ({
+          level: r.level || '',
+          targetId: r.targetId || '',
+          source: r.source || '',
+          platform: r.platform || '',
+          channel: r.channel || 'web',
+          fast: r._fast || '',
+          deep: r._deep || '',
+        })),
+      });
+    }
+    scheduleFilter();
+  });
+  target.addEventListener('change', scheduleFilter);
+  source.addEventListener('change', scheduleFilter);
+  platform.addEventListener('change', scheduleFilter);
+  channel.addEventListener('change', scheduleFilter);
+
+  clearBtn.addEventListener('click', () => {
+    q.value = '';
+    deepSearch.checked = false;
+    target.value = '';
+    source.value = '';
+    platform.value = '';
+    channel.value = '';
+    for (const input of levelInputs.values()) input.checked = false;
+    scheduleFilter();
+  });
+
+  closeDrawerBtn.addEventListener('click', () => {
+    selectedFilteredPos = -1;
+    drawer.classList.add('hidden');
+    renderViewport();
+  });
+
+  copyJsonBtn.addEventListener('click', async () => {
+    if (selectedFilteredPos < 0 || selectedFilteredPos >= filteredIdx.length) return;
+    const rec = records[filteredIdx[selectedFilteredPos]];
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(rec, null, 2));
+    } catch {
+      // Clipboard not available in all contexts.
+    }
+  });
+
+  listShell.addEventListener('scroll', () => renderViewport());
+
+  window.addEventListener('keydown', (ev) => {
+    if (!filteredIdx.length) return;
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      setSelected(Math.min(filteredIdx.length - 1, selectedFilteredPos + 1));
+      const y = selectedFilteredPos * ROW_H;
+      if (y > listShell.scrollTop + listShell.clientHeight - ROW_H) {
+        listShell.scrollTop = y - listShell.clientHeight + ROW_H;
+      }
+      return;
+    }
+    if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      setSelected(Math.max(0, selectedFilteredPos - 1));
+      const y = selectedFilteredPos * ROW_H;
+      if (y < listShell.scrollTop) {
+        listShell.scrollTop = y;
+      }
+      return;
+    }
+    if (ev.key === 'Escape') {
+      selectedFilteredPos = -1;
+      drawer.classList.add('hidden');
+      renderViewport();
+    }
+  });
+
+  loadData().catch((err) => {
+    stats.textContent = 'Failed to load data';
+    rows.innerHTML = '<div class="status">' + esc(err.message || String(err)) + '</div>';
+  });
+})();
+</script>
+</body>
+</html>

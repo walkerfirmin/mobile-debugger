@@ -14,7 +14,8 @@
  */
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync } from 'node:fs';
+import { execa } from 'execa';
 import { join } from 'node:path';
 import { listDevices } from './adb.js';
 import { listIosDevices } from './ios/devices.js';
@@ -26,6 +27,7 @@ import { buildViewer } from './output/viewer.js';
 import { formatRecord } from './output/tty.js';
 import { LogcatStreamer } from './native/android-logcat.js';
 import { IosSyslogStreamer } from './native/ios-syslog.js';
+import { startViewerServer } from './viewer-server.js';
 import type { NativeStreamer } from './native/streamer.js';
 import type { CaptureOptions, LogRecord, Platform } from './types.js';
 
@@ -104,6 +106,24 @@ interface CaptureFlags {
   native: boolean;
   bundleId?: string;
   process?: string;
+}
+
+async function openBrowser(url: string): Promise<void> {
+  try {
+    switch (process.platform) {
+      case 'darwin':
+        await execa('open', [url]);
+        return;
+      case 'win32':
+        await execa('cmd', ['/c', 'start', '', url], { windowsHide: true });
+        return;
+      default:
+        await execa('xdg-open', [url]);
+        return;
+    }
+  } catch {
+    // Opening a browser is best-effort; users can copy the printed URL.
+  }
 }
 
 function commonOptions(cmd: Command): Command {
@@ -292,6 +312,42 @@ commonOptions(program.command('dump'))
     try {
       const ms = parseDuration(flags.duration ?? '30s');
       await runCapture(flags, ms);
+    } catch (err) {
+      console.error(chalk.red(`error: ${(err as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('view <file>')
+  .description('Open an .ndjson log file in the browser viewer.')
+  .action(async (file: string) => {
+    try {
+      accessSync(file, constants.R_OK);
+      const viewer = await startViewerServer(file);
+      console.error(chalk.green(`viewer: ${viewer.url}`));
+      await openBrowser(viewer.url);
+
+      const waitForSignal = async (): Promise<NodeJS.Signals> => {
+        return await new Promise<NodeJS.Signals>((resolveSignal) => {
+          const onSigint = (): void => {
+            process.off('SIGTERM', onSigterm);
+            resolveSignal('SIGINT');
+          };
+          const onSigterm = (): void => {
+            process.off('SIGINT', onSigint);
+            resolveSignal('SIGTERM');
+          };
+          process.once('SIGINT', onSigint);
+          process.once('SIGTERM', onSigterm);
+        });
+      };
+
+      const signal = await waitForSignal();
+      if (signal === 'SIGINT') {
+        console.error(chalk.gray('\nstopping viewer…'));
+      }
+      await viewer.close();
     } catch (err) {
       console.error(chalk.red(`error: ${(err as Error).message}`));
       process.exit(1);

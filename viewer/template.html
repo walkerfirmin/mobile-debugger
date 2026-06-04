@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>dump-logs viewer</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --border:#ddd; --hover:#f4f4f4;
+    --err:#c0392b; --warn:#b7791f; --info:#2563eb; --debug:#6b7280; --log:#111; --row-hover:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --fg:#e7e9ee; --muted:#8a93a6; --border:#222831; --hover:#1a1f29;
+      --row-hover:#161a23; --log:#e7e9ee; }
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;z-index:10;}
+  header input,header select,header button{font:inherit;padding:4px 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;}
+  header label{display:flex;gap:4px;align-items:center;color:var(--muted);}
+  #stats{margin-left:auto;color:var(--muted);}
+  table{border-collapse:collapse;width:100%;}
+  tbody tr{border-top:1px solid var(--border);}
+  tbody tr:hover{background:var(--row-hover);}
+  td{padding:4px 8px;vertical-align:top;}
+  td.ts{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;}
+  td.lvl{font-weight:600;text-transform:uppercase;font-size:11px;white-space:nowrap;}
+  .lvl-error{color:var(--err);} .lvl-warn{color:var(--warn);} .lvl-info{color:var(--info);}
+  .lvl-debug,.lvl-trace{color:var(--debug);} .lvl-log{color:var(--log);}
+  td.tgt{color:var(--muted);white-space:nowrap;}
+  td.args{font-family:inherit;}
+  details{cursor:pointer;}
+  details > summary{list-style:none;}
+  details > summary::-webkit-details-marker{display:none;}
+  details > summary::before{content:"▶ ";color:var(--muted);}
+  details[open] > summary::before{content:"▼ ";}
+  .key{color:var(--info);}
+  .str{color:#22863a;} @media (prefers-color-scheme: dark){.str{color:#7ee787;}}
+  .num{color:#b08800;}
+  .bool{color:#9a3eb8;}
+  .nul{color:var(--muted);}
+  .meta{color:var(--muted);font-style:italic;}
+  .copy{font-size:11px;color:var(--muted);background:none;border:0;cursor:pointer;padding:0 4px;}
+  .copy:hover{color:var(--fg);}
+  .stack{white-space:pre-wrap;color:var(--muted);font-size:12px;margin-top:2px;}
+  .pill{display:inline-block;padding:0 6px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:11px;margin-right:4px;}
+</style>
+</head>
+<body>
+<header>
+  <strong>dump-logs viewer</strong>
+  <input id="q" placeholder="search…" size="32" />
+  <label>level <select id="level" multiple size="1">
+    <option value="">(any)</option>
+    <option>error</option><option>warn</option><option>info</option><option>log</option>
+    <option>debug</option><option>trace</option><option>verbose</option>
+  </select></label>
+  <label>target <select id="target"><option value="">(any)</option></select></label>
+  <label>source <select id="source">
+    <option value="">(any)</option>
+    <option>console</option><option>exception</option><option>log</option><option>shim</option><option>native</option>
+  </select></label>
+  <label>platform <select id="platform">
+    <option value="">(any)</option>
+    <option>android</option><option>ios</option>
+  </select></label>
+  <label>channel <select id="channel">
+    <option value="">(any)</option>
+    <option>web</option><option>native</option>
+  </select></label>
+  <button id="clear">clear</button>
+  <div id="stats"></div>
+</header>
+<table>
+  <tbody id="rows"></tbody>
+</table>
+<script id="data" type="application/x-ndjson">__NDJSON__</script>
+<script>
+(() => {
+  const raw = document.getElementById('data').textContent || '';
+  const records = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim(); if (!t) continue;
+    try { records.push(JSON.parse(t)); } catch { /* ignore */ }
+  }
+  const rowsEl = document.getElementById('rows');
+  const q = document.getElementById('q');
+  const level = document.getElementById('level');
+  const target = document.getElementById('target');
+  const source = document.getElementById('source');
+  const platform = document.getElementById('platform');
+  const channel = document.getElementById('channel');
+  const stats = document.getElementById('stats');
+
+  // Populate target dropdown.
+  const targets = new Map();
+  for (const r of records) targets.set(r.targetId, r.targetLabel || r.targetId);
+  for (const [id, label] of targets) {
+    const o = document.createElement('option'); o.value = id; o.textContent = label;
+    target.appendChild(o);
+  }
+
+  function fmtTs(s){ try { return new Date(s).toISOString().slice(11,23); } catch { return s; } }
+
+  function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function renderValue(v, depth){
+    if (!v || typeof v !== 'object') return `<span class="meta">?</span>`;
+    switch (v.t) {
+      case 'undefined': return `<span class="nul">undefined</span>`;
+      case 'primitive':
+        if (v.value === null) return `<span class="nul">null</span>`;
+        if (typeof v.value === 'boolean') return `<span class="bool">${v.value}</span>`;
+        if (typeof v.value === 'number') return `<span class="num">${v.value}</span>`;
+        return `<span>${escapeHtml(v.value)}</span>`;
+      case 'string': return `<span class="str">"${escapeHtml(v.value)}"${v.truncated?'<span class="meta">…</span>':''}</span>`;
+      case 'bigint': return `<span class="num">${escapeHtml(v.value)}n</span>`;
+      case 'symbol': return `<span class="meta">Symbol(${escapeHtml(v.description||'')})</span>`;
+      case 'function': return `<span class="meta">ƒ ${escapeHtml(v.name||'')}()</span>`;
+      case 'date': return `<span class="meta">Date </span><span class="str">${escapeHtml(v.iso)}</span>`;
+      case 'regexp': return `<span class="str">/${escapeHtml(v.source)}/${escapeHtml(v.flags)}</span>`;
+      case 'cycle': return `<span class="meta">[Circular]</span>`;
+      case 'truncated': return `<span class="meta">[truncated: ${v.reason}]</span>`;
+      case 'unknown': return `<span class="meta">${escapeHtml(v.description||'?')}</span>`;
+      case 'promise': return `<span class="meta">Promise${v.state?' ('+v.state+')':''}</span>`;
+      case 'node': return `<span class="meta">&lt;${escapeHtml(v.tagName)}${v.id?' id="'+escapeHtml(v.id)+'"':''}&gt;</span>`;
+      case 'typedarray': return `<span class="meta">${escapeHtml(v.className)}(${v.length})</span>`;
+      case 'error': {
+        let head = `<span class="lvl-error">${escapeHtml(v.name)}</span>: <span>${escapeHtml(v.message||'')}</span>`;
+        if (v.stack) head += `<div class="stack">${escapeHtml(v.stack)}</div>`;
+        if (v.cause) head += `<div><span class="meta">cause:</span> ${renderValue(v.cause, depth+1)}</div>`;
+        return head;
+      }
+      case 'array': {
+        if (depth >= 6) return `<span class="meta">Array(${v.entries.length})</span>`;
+        const items = v.entries.map((e,i)=>`<div><span class="key">${i}:</span> ${renderValue(e, depth+1)}</div>`).join('');
+        return `<details ${depth===0?'open':''}><summary>Array(${v.entries.length})${v.truncated?' <span class="meta">…</span>':''}</summary>${items}</details>`;
+      }
+      case 'object': {
+        const keys = Object.keys(v.entries);
+        const head = (v.className?escapeHtml(v.className)+' ':'') + '{ ' + keys.length + ' keys }';
+        const body = keys.map(k=>`<div><span class="key">${escapeHtml(k)}:</span> ${renderValue(v.entries[k], depth+1)}</div>`).join('');
+        return `<details ${depth===0?'open':''}><summary>${head}${v.truncated?' <span class="meta">…</span>':''}</summary>${body}</details>`;
+      }
+      case 'map': {
+        const body = v.entries.map(([k,vv])=>`<div><span class="key">${renderValue(k, depth+1)}</span> => ${renderValue(vv, depth+1)}</div>`).join('');
+        return `<details><summary>Map(${v.entries.length})${v.truncated?' <span class="meta">…</span>':''}</summary>${body}</details>`;
+      }
+      case 'set': {
+        const body = v.entries.map(e=>`<div>${renderValue(e, depth+1)}</div>`).join('');
+        return `<details><summary>Set(${v.entries.length})${v.truncated?' <span class="meta">…</span>':''}</summary>${body}</details>`;
+      }
+      default: return `<span class="meta">${escapeHtml(JSON.stringify(v))}</span>`;
+    }
+  }
+
+  function matches(r){
+    const term = q.value.trim().toLowerCase();
+    if (level.value && r.level !== level.value) return false;
+    if (target.value && r.targetId !== target.value) return false;
+    if (source.value && r.source !== source.value) return false;
+    if (platform.value && r.platform !== platform.value) return false;
+    if (channel.value && (r.channel || 'web') !== channel.value) return false;
+    if (!term) return true;
+    return JSON.stringify(r).toLowerCase().includes(term);
+  }
+
+  function render(){
+    const frag = document.createDocumentFragment();
+    let shown = 0;
+    for (const r of records) {
+      if (!matches(r)) continue;
+      shown++;
+      const tr = document.createElement('tr');
+      const argsHtml = r.args.map(a=>renderValue(a, 0)).join(' ');
+      tr.innerHTML =
+        `<td class="ts">${fmtTs(r.ts)}</td>` +
+        `<td class="lvl lvl-${r.level}">${r.level}</td>` +
+        `<td class="tgt"><span class="pill">${escapeHtml(r.targetLabel||r.targetId)}</span><span class="pill">${r.source}</span>${r.platform?`<span class="pill">${escapeHtml(r.platform)}</span>`:''}</td>` +
+        `<td class="args">${argsHtml}${r.stack?`<div class="stack">${escapeHtml(r.stack)}</div>`:''}</td>` +
+        `<td><button class="copy" title="copy as JSON">⧉</button></td>`;
+      tr.querySelector('.copy').addEventListener('click', () => navigator.clipboard.writeText(JSON.stringify(r, null, 2)));
+      frag.appendChild(tr);
+    }
+    rowsEl.replaceChildren(frag);
+    stats.textContent = `${shown} / ${records.length}`;
+  }
+  q.addEventListener('input', render);
+  level.addEventListener('change', render);
+  target.addEventListener('change', render);
+  source.addEventListener('change', render);
+  platform.addEventListener('change', render);
+  channel.addEventListener('change', render);
+  document.getElementById('clear').addEventListener('click', () => {
+    q.value=''; level.value=''; target.value=''; source.value=''; platform.value=''; channel.value=''; render();
+  });
+  render();
+})();
+</script>
+</body>
+</html>
