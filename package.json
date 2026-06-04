@@ -1,0 +1,38 @@
+ {
+  "name": "dump-console-logs",
+  "version": "0.1.0",
+  "description": "Capture deep DevTools console logs plus native device logs from Android and iOS WebView apps (main app + in-app-browser) into NDJSON + a self-contained HTML viewer.",
+  "type": "module",
+  "bin": {
+    "dump-logs": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "chrome-remote-interface": "^0.33.2",
+    "commander": "^12.1.0",
+    "execa": "^9.5.1",
+    "undici": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.31.14",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}
