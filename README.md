@@ -248,6 +248,141 @@ dump-logs dump --duration 5000ms --redact 'Bearer\s+\S+'
 
 The remaining flags are shared between `live` and `dump`:
 
+---
+
+### `dump-logs view`
+
+Serve an existing `.ndjson` file in the HTML viewer and open it in your default browser. The viewer runs locally — no network access required.
+
+```sh
+dump-logs view logs/session-2026-06-05T14-01-53-221Z.ndjson
+dump-logs view logs/session-2026-06-05T14-01-53-221Z.filtered.ndjson
+```
+
+Press **Ctrl-C** to stop the local server.
+
+---
+
+### `dump-logs filter`
+
+Interactively remove known-noisy entries from a captured `.ndjson` file and write a cleaned copy. Loads a filter-groups config, prints a numbered menu with per-group match counts, prompts you for a selection, then writes `<basename>.filtered.ndjson` in the same directory as the input.
+
+```sh
+# Auto-detects filter-groups.json next to the input file or in ./
+dump-logs filter --input logs/session-2026-06-05T14-01-53-221Z.ndjson
+
+# Explicit groups file
+dump-logs filter --input logs/session.ndjson --groups-file my-filter-groups.json
+```
+
+Sample interaction:
+
+```
+groups file : /project/filter-groups.json (5 group(s) — auto-detected)
+input       : logs/session-2026-06-05T14-01-53-221Z.ndjson
+Scanning…
+Total records: 6,278
+
+Available filter groups:
+
+  [1] Console grouping lifecycle tokens
+      Matches: 1,243 / 6,278 (19.8%)
+
+  [2] Duplicate console source shadow entries
+      Matches: 1,581 / 6,278 (25.2%)
+
+  [3] __DUMPLOGS__ native re-echoes
+      Matches: 571 / 6,278 (9.1%)
+
+  [4] Per-cookie verbose confirmation logs
+      Matches: 316 / 6,278 (5.0%)
+
+  [5] Android OS / platform system noise
+      Matches: 1,106 / 6,278 (17.6%)
+
+  [all] Select all groups (~4,817 entries, ~76.7%)
+
+Enter group numbers to exclude (space/comma separated, "all", or Enter to cancel): 1 2 3
+
+Filtering 3 group(s)…
+
+Done.
+  Input  : 6,278 records
+  Removed: 3,395 (54.1%)
+  Output : 2,883 records
+  File   : logs/session-2026-06-05T14-01-53-221Z.filtered.ndjson
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-i, --input <file>` | required | Path to the `.ndjson` to clean. |
+| `-g, --groups-file <file>` | auto-detect | Filter-groups JSON config. Searched first next to the input file, then in cwd. |
+
+---
+
+### `dump-logs analyze`
+
+Scan a `.ndjson` file and report high-frequency log patterns that are **not** covered by your existing filter groups — so you can identify new noise and extend `filter-groups.json` for future sessions.
+
+```sh
+# Print the uncovered-pattern table (auto-detects filter-groups.json)
+dump-logs analyze --input logs/session.ndjson
+
+# Show top 60 patterns using a wider message prefix
+dump-logs analyze --input logs/session.ndjson --top 60 --prefix-len 80
+
+# Generate a starter filter-groups.json scaffold
+dump-logs analyze --input logs/session.ndjson --emit-scaffold > new-groups.json
+
+# Analyze without any existing groups (treats all records as uncovered)
+dump-logs analyze --input logs/session.ndjson --groups-file /dev/null
+```
+
+Sample output:
+
+```
+existing groups: /project/filter-groups.json (5 group(s) — auto-detected)
+input       : logs/session.ndjson
+Scanning…
+
+Total records   : 6,278
+Already covered : 3,860 (61.5%)
+Uncovered       : 2,418 (38.5%)
+
+Top 40 uncovered patterns:
+
+  COUNT    PCT  SOURCE   LEVEL  MESSAGE PREFIX
+  -----  -----  -------  -----  ----------------------------------------
+    285    4.5%  shim     dir    [object]
+    199    3.2%  native   info   File: https://localhost/src_bootstrap_ts…
+     56    0.9%  shim     log    [HttpService - httpSend] -
+     51    0.8%  shim     log    Network status changed
+     18    0.3%  shim     log    [LoginService - postAuthentication] -
+    ...
+
+Tip: add --emit-scaffold to generate a starter filter-groups.json you can edit.
+```
+
+When `--emit-scaffold` is used, valid JSON is written to **stdout** and all diagnostic output goes to **stderr**, so you can pipe safely:
+
+```sh
+dump-logs analyze --input logs/session.ndjson --emit-scaffold > new-groups.json 2>&1
+# Edit new-groups.json, remove prefixes that are real signal, then:
+dump-logs filter --input logs/session.ndjson --groups-file new-groups.json
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-i, --input <file>` | required | Path to the `.ndjson` to scan. |
+| `-g, --groups-file <file>` | auto-detect | Existing groups to treat as already-covered. |
+| `--top <n>` | `40` | Number of top uncovered patterns to display. |
+| `--prefix-len <n>` | `60` | Characters of message used as the bucket key. |
+| `--emit-scaffold` | off | Write a starter `filter-groups.json` scaffold to stdout. |
+
+---
+
+The remaining flags are shared between `live` and `dump`:
+
 #### Common capture flags
 
 | Flag | Default | Description |
@@ -391,6 +526,30 @@ adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com
 dump-logs live --port 9222 --target all
 ```
 
+### Filtering and cleaning a captured log
+
+```sh
+# 1. Identify what noise patterns exist in a fresh capture
+dump-logs analyze --input logs/session-new.ndjson
+
+# 2. If new patterns appear, scaffold a groups file and edit it
+dump-logs analyze --input logs/session-new.ndjson --emit-scaffold > extra-groups.json
+# … edit extra-groups.json, remove prefixes that are real signal …
+
+# 3. Filter using the bundled groups file (covers the five common noise groups)
+dump-logs filter --input logs/session-new.ndjson
+
+# 4. Inspect the cleaned result in the viewer
+dump-logs view logs/session-new.filtered.ndjson
+```
+
+### Open a previously captured log in the viewer
+
+```sh
+dump-logs view logs/session-2026-06-05T14-01-53-221Z.ndjson
+dump-logs view logs/session-2026-06-05T14-01-53-221Z.filtered.ndjson
+```
+
 ### Capture iOS WebView + native logs together
 
 ```sh
@@ -523,6 +682,7 @@ npm run build                 # emit dist/
 ```
 src/
 ├── cli.ts                  # commander entrypoint
+├── filter.ts               # filter-groups loader, matching logic, analyze + write passes
 ├── adb.ts                  # Android: device list, /proc/net/unix parsing, forward
 ├── platform.ts            # acquire a local CDP endpoint (Android + iOS)
 ├── ios/
@@ -547,6 +707,8 @@ src/
 
 viewer/
 └── template.html           # __NDJSON__ placeholder
+
+filter-groups.json          # bundled noise-group definitions (five Android / Capacitor groups)
 
 test/
 ├── shim.test.ts

@@ -1,0 +1,88 @@
+{
+  "$schema": "./filter-groups.schema.json",
+  "groups": [
+    {
+      "id": "console-grouping",
+      "label": "Console grouping lifecycle tokens",
+      "description": "groupCollapsed / groupEnd / dir-undefined entries from the Capacitor bridge — visual DevTools formatting wrappers with zero information content in a flat log file.",
+      "conditions": [
+        {
+          "level": ["groupCollapsed", "groupEnd"]
+        },
+        {
+          "level": ["dir"],
+          "args0_t": "undefined"
+        }
+      ]
+    },
+    {
+      "id": "console-duplicates",
+      "label": "Duplicate console source shadow entries",
+      "description": "Every web-layer log fires twice: once via source=shim (rich, stack-traced) and once via source=console (raw CDP). Removing the console duplicates leaves the shim copies intact.",
+      "conditions": [
+        {
+          "source": "console",
+          "level": ["log", "debug", "groupCollapsed", "dir", "groupEnd"]
+        }
+      ]
+    },
+    {
+      "id": "dumplogs-echoes",
+      "label": "__DUMPLOGS__ native re-echoes",
+      "description": "Android native logger re-emits every web console message already fully captured by the shim. Identifiable by the __DUMPLOGS__ prefix in the native debug message.",
+      "conditions": [
+        {
+          "source": "native",
+          "level": ["debug"],
+          "args0_value_contains": "__DUMPLOGS__"
+        }
+      ]
+    },
+    {
+      "id": "cookie-verbose",
+      "label": "Per-cookie verbose confirmation logs",
+      "description": "Individual per-key acknowledgments from CookieService (setCookie ok, cookie: name=, native cookie: key=). Summary-level logs already capture the outcome; these per-entry lines are noise during normal operation.",
+      "conditions": [
+        {
+          "args0_value_starts_with": [
+            "[CookieService] setCookie ok:",
+            "[CookieService]   cookie: name=",
+            "[CookieService] native cookie: key="
+          ]
+        }
+      ]
+    },
+    {
+      "id": "android-platform-noise",
+      "label": "Android OS / platform system noise",
+      "description": "Native log entries from Android system components unrelated to app behaviour: input method framework (AGTM), satellite radio stack, WiFi interface manager, stylus events, clipboard suggestions, ART dex optimisation, OpenGL no-ops, kernel /proc permission denials, IME keyboard helpers, and native info logs with an undefined message.",
+      "conditions": [
+        {
+          "source": "native",
+          "args0_value_starts_with": [
+            "AGTM parsing failed",
+            "getConfigParser: domain=satellite",
+            "isSatelliteAttachSupportedVia",
+            "satelliteConfigParser is not ready",
+            "isInCarrierRoamingNbIotNtn",
+            "getCarrierRoamingNtn",
+            "bestIfaceCreationProposal is null",
+            "StylusModule.onUpdateToolType",
+            "ProactiveSuggestionsHolderManager",
+            "GetBestInfo: odex",
+            "GetBestInfo: dm",
+            "BaseKeyboardSizeHelper",
+            "Keyboard.getKeyboardViewHelper",
+            "readlink(/proc/self/fd/",
+            "[GLClientState.cpp"
+          ]
+        },
+        {
+          "source": "native",
+          "level": ["info"],
+          "args0_value_contains": "- Line 157 - Msg: undefined"
+        }
+      ]
+    }
+  ]
+}

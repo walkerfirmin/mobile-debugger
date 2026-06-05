@@ -354,6 +354,237 @@ program
     }
   });
 
+program
+  .command('analyze')
+  .description(
+    'Scan an .ndjson log and report high-frequency patterns NOT covered by your existing\n' +
+      'filter groups — so you can identify new noise and extend filter-groups.json.\n' +
+      'Use --emit-scaffold to print a starter groups JSON to stdout.',
+  )
+  .requiredOption('-i, --input <file>', 'Path to the .ndjson file to analyze')
+  .option(
+    '-g, --groups-file <file>',
+    'Existing filter-groups JSON to exclude already-covered records (optional)',
+  )
+  .option('--top <n>', 'Number of top patterns to show', '40')
+  .option('--prefix-len <n>', 'Message prefix length for bucketing', '60')
+  .option(
+    '--emit-scaffold',
+    'Print a starter filter-groups.json scaffold to stdout (pipe to a new file)',
+    false,
+  )
+  .action(
+    async (opts: {
+      input: string;
+      groupsFile?: string;
+      top: string;
+      prefixLen: string;
+      emitScaffold: boolean;
+    }) => {
+      try {
+        const { resolve, dirname: pathDirname, join: pathJoin } = await import('node:path');
+        const { existsSync } = await import('node:fs');
+        const { loadFilterGroups, analyzeUncovered, buildGroupsScaffold } =
+          await import('./filter.js');
+
+        const inputPath = resolve(opts.input);
+        if (!existsSync(inputPath)) {
+          console.error(chalk.red(`error: input file not found: ${inputPath}`));
+          process.exit(1);
+        }
+
+        // Load existing groups (optional)
+        let existingGroups: Awaited<ReturnType<typeof loadFilterGroups>> = [];
+        if (opts.groupsFile) {
+          const gfPath = resolve(opts.groupsFile);
+          if (!existsSync(gfPath)) {
+            console.error(chalk.red(`error: groups file not found: ${gfPath}`));
+            process.exit(1);
+          }
+          existingGroups = await loadFilterGroups(gfPath);
+          console.error(chalk.gray(`existing groups: ${gfPath} (${existingGroups.length} group(s))`));
+        } else {
+          // Auto-detect, same search order as filter command
+          const nextToInput = pathJoin(pathDirname(inputPath), 'filter-groups.json');
+          const inCwd = pathJoin(process.cwd(), 'filter-groups.json');
+          const detected = existsSync(nextToInput)
+            ? nextToInput
+            : existsSync(inCwd)
+              ? inCwd
+              : null;
+          if (detected) {
+            existingGroups = await loadFilterGroups(detected);
+            console.error(chalk.gray(`existing groups: ${detected} (${existingGroups.length} group(s) — auto-detected)`));
+          } else {
+            console.error(chalk.gray('no existing groups file found — analyzing all records'));
+          }
+        }
+
+        const topN = Math.max(1, parseInt(opts.top, 10) || 40);
+        const prefixLen = Math.max(10, parseInt(opts.prefixLen, 10) || 60);
+
+        console.error(chalk.gray(`input       : ${inputPath}`));
+        console.error(chalk.gray('Scanning…'));
+
+        const { total, uncoveredCount, buckets } = await analyzeUncovered(
+          inputPath,
+          existingGroups,
+          prefixLen,
+          topN,
+        );
+
+        const coveredCount = total - uncoveredCount;
+        const coveredPct = total > 0 ? ((coveredCount / total) * 100).toFixed(1) : '0.0';
+        const uncoveredPct = total > 0 ? ((uncoveredCount / total) * 100).toFixed(1) : '0.0';
+
+        process.stderr.write(
+          `\nTotal records   : ${total.toLocaleString()}\n` +
+            `Already covered : ${coveredCount.toLocaleString()} (${coveredPct}%)\n` +
+            `Uncovered       : ${uncoveredCount.toLocaleString()} (${uncoveredPct}%)\n` +
+            `\nTop ${topN} uncovered patterns:\n\n`,
+        );
+
+        if (buckets.length === 0) {
+          process.stderr.write('  (none — all records are already covered by existing groups)\n');
+        } else {
+          // Column widths
+          const maxSrc = Math.max(6, ...buckets.map((b) => b.source.length));
+          const maxLvl = Math.max(5, ...buckets.map((b) => b.level.length));
+          const countWidth = buckets[0] ? String(buckets[0].count).length + 1 : 6;
+
+          // Header
+          process.stderr.write(
+            `  ${'COUNT'.padStart(countWidth)}  ${'PCT'.padStart(5)}` +
+              `  ${'SOURCE'.padEnd(maxSrc)}  ${'LEVEL'.padEnd(maxLvl)}  MESSAGE PREFIX\n`,
+          );
+          process.stderr.write(
+            `  ${'-'.repeat(countWidth)}  ${'-----'}` +
+              `  ${'-'.repeat(maxSrc)}  ${'-'.repeat(maxLvl)}  ${'-'.repeat(40)}\n`,
+          );
+
+          for (const b of buckets) {
+            const pct = total > 0 ? ((b.count / total) * 100).toFixed(1) : '0.0';
+            process.stderr.write(
+              `  ${String(b.count).padStart(countWidth)}  ${pct.padStart(5)}%` +
+                `  ${b.source.padEnd(maxSrc)}  ${b.level.padEnd(maxLvl)}  ${b.messagePrefix}\n`,
+            );
+          }
+
+          if (buckets.length === topN) {
+            process.stderr.write(`\n  (showing top ${topN} — use --top <n> to see more)\n`);
+          }
+        }
+
+        if (opts.emitScaffold) {
+          const scaffold = buildGroupsScaffold(buckets);
+          process.stdout.write(JSON.stringify(scaffold, null, 2) + '\n');
+          process.stderr.write(
+            chalk.green('\nScaffold written to stdout. Pipe to a file and edit before use:\n') +
+              chalk.gray(`  dump-logs analyze --input ${opts.input} --emit-scaffold > my-groups.json\n`),
+          );
+        } else if (buckets.length > 0) {
+          process.stderr.write(
+            chalk.gray(
+              '\nTip: add --emit-scaffold to generate a starter filter-groups.json you can edit.\n',
+            ),
+          );
+        }
+      } catch (err) {
+        console.error(chalk.red(`error: ${(err as Error).message}`));
+        process.exit(1);
+      }
+    },
+  );
+
+program
+  .command('filter')
+  .description(
+    'Interactively filter noise groups from an .ndjson log file and write a cleaned copy.\n' +
+      'Prints a numbered menu with match counts, prompts for group selection, then writes\n' +
+      '<basename>.filtered.ndjson in the same directory as the input file.',
+  )
+  .requiredOption('-i, --input <file>', 'Path to the .ndjson file to clean')
+  .option(
+    '-g, --groups-file <file>',
+    'Filter-groups JSON config (default: filter-groups.json next to the input file, then ./filter-groups.json)',
+  )
+  .action(async (opts: { input: string; groupsFile?: string }) => {
+    try {
+      const { resolve, dirname: pathDirname, join: pathJoin } = await import('node:path');
+      const { existsSync } = await import('node:fs');
+      const { loadFilterGroups, scanGroupCounts, promptGroupSelection, writeFiltered } =
+        await import('./filter.js');
+
+      const inputPath = resolve(opts.input);
+      if (!existsSync(inputPath)) {
+        console.error(chalk.red(`error: input file not found: ${inputPath}`));
+        process.exit(1);
+      }
+
+      // Resolve groups file
+      let groupsFilePath: string;
+      if (opts.groupsFile) {
+        groupsFilePath = resolve(opts.groupsFile);
+        if (!existsSync(groupsFilePath)) {
+          console.error(chalk.red(`error: groups file not found: ${groupsFilePath}`));
+          process.exit(1);
+        }
+      } else {
+        const nextToInput = pathJoin(pathDirname(inputPath), 'filter-groups.json');
+        const inCwd = pathJoin(process.cwd(), 'filter-groups.json');
+        if (existsSync(nextToInput)) {
+          groupsFilePath = nextToInput;
+        } else if (existsSync(inCwd)) {
+          groupsFilePath = inCwd;
+        } else {
+          console.error(
+            chalk.red(
+              `error: no filter-groups.json found next to the input file or in the current directory.\n` +
+                `  Pass --groups-file <path> to specify the config explicitly.`,
+            ),
+          );
+          process.exit(1);
+        }
+      }
+
+      console.error(chalk.gray(`groups file : ${groupsFilePath}`));
+      console.error(chalk.gray(`input       : ${inputPath}`));
+      console.error(chalk.gray('Scanning…'));
+
+      const groups = await loadFilterGroups(groupsFilePath);
+      const { total, counts } = await scanGroupCounts(inputPath, groups);
+
+      console.error(chalk.gray(`Total records: ${total.toLocaleString()}`));
+
+      const { selected, cancelled } = await promptGroupSelection(groups, counts, total);
+
+      if (cancelled || selected.length === 0) {
+        console.error(chalk.yellow('No groups selected — nothing to do.'));
+        process.exit(0);
+      }
+
+      console.error(chalk.gray(`\nFiltering ${selected.length} group(s)…`));
+      const result = await writeFiltered(inputPath, selected);
+
+      const removed = result.inputCount - result.outputCount;
+      const removedPct =
+        result.inputCount > 0 ? ((removed / result.inputCount) * 100).toFixed(1) : '0.0';
+
+      console.error(
+        chalk.green(
+          `\nDone.\n` +
+            `  Input  : ${result.inputCount.toLocaleString()} records\n` +
+            `  Removed: ${removed.toLocaleString()} (${removedPct}%)\n` +
+            `  Output : ${result.outputCount.toLocaleString()} records\n` +
+            `  File   : ${result.outputPath}`,
+        ),
+      );
+    } catch (err) {
+      console.error(chalk.red(`error: ${(err as Error).message}`));
+      process.exit(1);
+    }
+  });
+
 program.parseAsync(process.argv).catch((err: Error) => {
   console.error(chalk.red(err.stack ?? err.message));
   process.exit(1);
